@@ -9,7 +9,7 @@
 #include <string.h>
 
 void q_sort(int *start, int *end);
-int get_tuples(char* strings, int* counts, int max_string_count);
+int get_tuples(char *str, char* strings, int* counts, int max_string_count);
 bool is_match(char *a, char *b, int len, int max);
 int is_match_char(char a, char b);
 
@@ -27,39 +27,32 @@ int main(int argc, char **argv)
 	double start = 0.0, end = 0.0, wall_server, wall_client, wall_comp;
 	
 	// Main variables
-	int string_len, max_num_strings = 1e6, num_strings = 0, threshold = 2;
+	int string_len = 600, max_num_strings = 1e6, num_strings = 0, threshold = 2;
 	int diff, num_matches, local_distance, next_target = 0, current_string;
-	char *a, *local_a;
+	char *a, *local_a, *stream;
 	int *count;
 	bool *merged;
 	size_t count_size = sizeof(int) * max_num_strings;
 	size_t merged_size = sizeof(bool) * max_num_strings;
-	
-	// Initialize MPI
-	MPI_Init(&argc, &argv);
-	MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
-	MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
-	MPI_Get_processor_name(processor_name, &namelen);
-
-	// Setup input
-	if (argc < 2) {
-		fprintf(stderr, "Usage: %s string-length\n", argv[0]);
-		exit(1);
-	}
-	string_len = atoi(argv[1]);
 	
 	// Variables dependent on string length
 	int array_len = string_len + 1;
 	int a_char_size = num_strings * string_len;
 	int num_local_strings = (num_strings + numprocs - 1) / numprocs; // round up
 	int local_a_char_size = num_local_strings * string_len;
-	size_t size = sizeof(char) * max_num_strings * array_len;
+	size_t a_size = sizeof(char) * max_num_strings * array_len;
 	size_t local_size = sizeof(char) * num_local_strings * array_len;
 	stream = (char *)malloc(sizeof(char) * array_len);
 	char target[array_len], other[array_len];
 	
+	// Initialize MPI
+	MPI_Init(&argc, &argv);
+	MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
+	MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+	MPI_Get_processor_name(processor_name, &namelen);
+	
 	// Malloc a, count, and merged arrays
-	a = (char *)malloc(size);
+	a = (char *)malloc(a_size);
 	if (!a) {
 		if (myrank == 0)
 			perror("unable to allocate array a: "); 
@@ -76,26 +69,28 @@ int main(int argc, char **argv)
 		if (myrank == 0)
 			perror("unable to allocate array merged: "); 
 		exit(-1);
-	}	
+	}
 	
 	
-
 	// Start clock
 	start = MPI_Wtime();
 	
 	// Read data file from memory
-	num_strings = get_tuples(a, count);
+	num_strings = get_tuples(stream, a, count, max_num_strings);
 
 	// Stop clock and record read time
 	end = MPI_Wtime();
 	wall_server = end - start;
 	
-
+	
+	// Initialize merged array to all false
+	for (i = 0; i < num_strings; i++)
+		merged[i] = false;
+	
 	// Sort strings from highest count to lowest count here (WIP)
 	int *start = &count[0];
 	int *end = &count[num_strings - 1];
 	q_sort(start, end);
-	
 	
 	
 	// Start clock
@@ -128,9 +123,9 @@ int main(int argc, char **argv)
 	{
 		// Find next target string
 		if (myrank == 0) {
-			while (merged[next_target] == true && next_target < num_strings)
+			while ((merged[next_target] == true) && (next_target < num_strings))
 				next_target++;
-			if ( next_target < num_strings )
+			if (next_target < num_strings)
 				strncpy(target, &a[string_len * next_target], string_len);
 			else break; // we are done
 		}		
@@ -141,17 +136,19 @@ int main(int argc, char **argv)
 			
 		// Do the actual work (find the strings to merge and merge them)
 		num_matches = 0;
-		for (i = 0; i < local_a_char_size; i += string_len)
+		for (i = 0; i < num_local_strings; i++)
 		{
-			current_string = (myrank * num_local_strings) + (i / string_len);
-			if ((next_target != current_string) && (current_string < num_strings) && (merged[current_string] == false))
+			current_string = (myrank * num_local_strings) + i;
+			if ((next_target != current_string)
+				&& (current_string < num_strings)
+				&& (merged[current_string] == false))
 			{
-				strncpy(other, &local_a[i], string_len);
+				strncpy(other, &local_a[i * string_len], string_len);
 				if (is_match(target, other, string_len, threshold))
 				{
 					// Merge current string and add count
 					num_matches++;
-					merged[(myrank * num_local_strings) + (i / string_len)] = true;
+					merged[current_string] = true;
 					count[next_target] += count[current_string];
 				}
 			}
@@ -177,9 +174,8 @@ int main(int argc, char **argv)
 
 
 // Read strings and counts from file, by George
-int get_tuples(char* strings, int* counts, int max_string_count)
+int get_tuples(char *str, char* strings, int* counts, int max_string_count)
 {
-	char str[length + 1];
 	int current_string_count = 0;
 
 	{
@@ -219,6 +215,7 @@ int get_tuples(char* strings, int* counts, int max_string_count)
 
 
 // The actual string comparison (working in chunks with early exit), by Edward
+// Assumed that string length is divisible by 6
 bool is_match(char *a, char *b, int len, int max)
 {
 	int diff = 0;
