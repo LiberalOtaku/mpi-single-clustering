@@ -1,21 +1,24 @@
 // File: main.c
-// Authors: Edward Ly, Byron Roosa(, and possibly George Crowson)
-// Last Updated: 22 April 2016
+// Authors: Edward Ly, Eamon Roosa, George Crowson
+// Last Updated: 26 April 2016
 // Single-linkage clustering program on strings using MPI implementation.
 #include <stdio.h>
 #include <stdlib.h>
 #include <mpi.h>
 #include <stdbool.h>
+#include <string.h>
 
+int get_tuples(char* strings, int* counts, int max_string_count);
 bool is_match(char *a, char *b, int len, int max);
 int is_match_char(char a, char b);
 
+// Main program, by Edward
 int main(int argc, char **argv)
 {
 	// MPI variables
 	int numprocs, myrank, namelen;	
-    char processor_name[MPI_MAX_PROCESSOR_NAME];
-    MPI_Status status;
+	char processor_name[MPI_MAX_PROCESSOR_NAME];
+	MPI_Status status;
 	
 	// Program variables
 	bool debug = true;
@@ -24,61 +27,48 @@ int main(int argc, char **argv)
 	
 	// Main variables
 	int string_len, max_num_strings = 1e6, num_strings = 0, threshold = 2;
-	int diff, num_matches, local_distance, num_comps;
+	int diff, num_matches, local_distance, num_comps, next_target = 0, current_string;
 	int *count;
 	bool *merged;
-	char *a, *local_a, *stream;
-	FILE *fstream = NULL;
+	char *a, *local_a;
 	
 	// Initialize MPI
-    MPI_Init(&argc, &argv);
-    MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
-    MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
-    MPI_Get_processor_name(processor_name, &namelen);
+	MPI_Init(&argc, &argv);
+	MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
+	MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+	MPI_Get_processor_name(processor_name, &namelen);
 
 	// Setup input
 	if (argc < 3) {
 		fprintf(stderr, "Usage: %s file-name string-length\n", argv[0]);
-		exit(1); }
+		exit(1);
+	}
 	string_len = atoi(argv[2]);
 	
 	// Variables dependent on string length
 	int array_len = string_len + 1;
 	int a_char_size = num_strings * string_len;
-	int num_local_strings = num_strings / numprocs;
+	int num_local_strings = num_strings / numprocs; // assume this divides evenly for now
+	int local_a_char_size = num_local_strings * string_len;
 	size_t size = sizeof(char) * max_num_strings * array_len;
 	size_t local_size = sizeof(char) * num_local_strings * array_len;
 	stream = (char *)malloc(sizeof(char) * array_len);
 	char target[array_len], other[array_len];
 	
-	// Start clock
-	start = MPI_Wtime();
-	
-	// Open file
-	fstream = fopen(argv[1], "r");
-	if (fstream == NULL) {
-		fprintf(stderr, "Unable to open file '%s'\n", argv[1]);
-		exit(1); }
-
 	// Malloc a
 	a = (char *)malloc(size);
 	if (!a && myrank == 0) {
 		perror("unable to allocate array a: "); 
-		exit(-1); }
-
-	// Read file to a
-	i = 0;
-	while (fscanf(fstream, "%s", stream) != EOF) {
-		if (debug)
-			fprintf(stderr, "%.30s\n", stream);
-		strcpy(&a[i], stream);
-		i += string_len;
-		num_strings++; }
-		
-	// Close file and stream
-	free(stream);
-	fclose(fstream);
+		exit(-1);
+	}
 	
+
+	// Start clock
+	start = MPI_Wtime();
+	
+	// Read data file from memory
+	num_strings = get_tuples(a, count);
+
 	// Stop clock and record read time
 	end = MPI_Wtime();
 	wall_server = end - start;
@@ -91,13 +81,16 @@ int main(int argc, char **argv)
 	count = (int *)malloc(count_size);
 	if (!count && myrank == 0) {
 		perror("unable to allocate array count: "); 
-		exit(-1); }
+		exit(-1);
+	}
 	merged = (bool *)malloc(merged_size);
 	if (!merged && myrank == 0) {
 		perror("unable to allocate array merged: "); 
-		exit(-1); }	
+		exit(-1);
+	}	
 	
-	// Sort strings from highest count to lowest count (WIP)
+	
+	// Sort strings from highest count to lowest count here (WIP)
 	
 	
 	
@@ -108,45 +101,70 @@ int main(int argc, char **argv)
 	local_a = (char *)malloc(local_size);
 	if (!local_a && myrank == 0) {
 		perror("unable to allocate array local_a: "); 
-		exit(-1); }
+		exit(-1);
+	}
 		
-	// Copy relevant strings to local process (WIP)
+	
+	// Copy relevant strings to local process here (WIP)
+	
 	
 	
 	// Stop clock and record copy time
 	end = MPI_Wtime();
 	wall_client = end - start;
 	
-	
-	
 	// Print wall times
 	if (debug && myrank == 0) {
 		fprintf(stderr, "Tot. read/copy wall time: server = %f, clients = %f\n", wall_server, wall_client);
-		fprintf(stderr, "Avg. read/copy wall time: server = %f, clients = %f\n", wall_server / (double)num_strings, wall_client / (double)num_strings); }
+		fprintf(stderr, "Avg. read/copy wall time: server = %f, clients = %f\n", wall_server / (double)num_strings, wall_client / (double)num_strings);
+	}
+	
+	// End prologue
 	
 	
-	// First test: find similar strings to merge
-	// Choose the first string in the list, compare it to all the other strings in the list
-	
-	// In the real program, finding the non-merged string with the highest count would go here.
-	strncpy(target, &a[0], string_len);	
-	
-	
-	// Start clock
-	start = MPI_Wtime();
+	while (true)
+	{
+		// Find next target string
+		while ( merged[next_target] == true && next_target < num_strings )
+			next_target++;
+		if ( next_target < num_strings )
+			strncpy(target, &a[string_len * next_target], string_len);
+		else break; // we are done
 		
-	// Do the actual comparison (find the number of strings to merge)
-	num_comps = num_matches = 0;
-	for (i = string_len; i < a_char_size; i += string_len) {
-		strncpy(other, &a[i], string_len);
-		num_matches += is_match(target, other, string_len, threshold);
-		num_comps++; }
+		
+		// Start clock
+		start = MPI_Wtime();
+			
+		// Do the actual comparison (find the number of strings to merge)
+		
+		// MPI implementation WIP
+		
+		num_comps = num_matches = 0;
+		for (i = 0; i < local_a_char_size; i += string_len)
+		{
+			current_string = (myrank * num_local_strings) + (i / string_len);
+			if ( next_target != current_string )
+			{
+				strncpy(other, &local_a[i], string_len);
+				if (is_match(target, other, string_len, threshold))
+				{
+					// Merge current string and add count
+					merged[(myrank * num_local_strings) + (i / string_len)] = true;
+					count[next_target] += count[current_string];
+				}
+			}
+		}
+		merged[next_target] = true;
+		
 
-	// Stop clock and record/print comp time
-	end = MPI_Wtime();
-	wall_comp = end - start;
-	if (debug && myrank == 0)
-		fprintf(stdout, "num_strings = %d, num_comps = %d, num_matches = %d, wall_comp = %.6f\n", num_strings, num_comps, num_matches, wall_comp);	
+		// Stop clock and record/print comp time
+		end = MPI_Wtime();
+		wall_comp = end - start;
+		if (debug && myrank == 0)
+			fprintf(stdout, "num_strings = %d, num_comps = %d, num_matches = %d, wall_comp = %.6f\n", num_strings, num_comps, num_matches, wall_comp);	
+	}
+	
+	// Do something to output list here
 	
 	// Cleanup
 	free(a); free(local_a);
@@ -155,7 +173,49 @@ int main(int argc, char **argv)
 }
 
 
-// The actual string comparison (working in chunks with early exit)
+// Read strings and counts from file, by George
+int get_tuples(char* strings, int* counts, int max_string_count)
+{
+	char str[length + 1];
+	int current_string_count = 0;
+
+	{
+		event("opening file");
+		FILE* f = fopen("/cluster/home/charliep/courses/cs360/single-linkage-clustering/Iceland2014.trim.contigs.good.unique.good.filter.unique.count.fasta", "r");
+		if(f == NULL) error("file was unable to be opened");
+
+		event("reading file");
+		//@note #this could be more robust but the input is well-formatted so meh
+		while (fscanf(f, "%s", str) != EOF) {
+			strcpy(&strings[length * current_string_count], str);
+			//printf("str: %s\n", str);
+
+			//get the count
+			//@note #could probably use fscanf instead
+			fscanf(f, "%s", str);
+			counts[current_string_count] = atoi(str);
+
+			current_string_count++;
+
+			//@hack #debugging
+			if (current_string_count >= 100) break;
+
+			if (current_string_count > max_string_count)
+				error("number of tuples in file is greater than maximum allowed\n");
+		}
+
+		//debug("loaded %d tuples", current_string_count);
+
+		event("closing file");
+		fclose(f);
+		free(f);
+	}
+
+	return current_string_count;
+}
+
+
+// The actual string comparison (working in chunks with early exit), by Edward
 bool is_match(char *a, char *b, int len, int max)
 {
 	int diff = 0;
@@ -174,7 +234,7 @@ bool is_match(char *a, char *b, int len, int max)
 }
 
 
-// The individual character comparison
+// The individual character comparison, by Eamon
 int is_match_char(char a, char b)
 {
 	char is_matched;
